@@ -61,7 +61,7 @@ CATEGORIES = {
         "LILLY", "APOTEKA", "VIDAKOVI", "VUCKOVIC", "KRSENKOVIC", "BENU"
     ],
     "🩺 Zdravstveni pregledi i analize": [
-        "MEDILAB", "DRPISCEVIC", "DR PISCEVIC"
+        "MEDILAB", "DRPISCEVIC", "DR PISCEVIC", "MEDILEK", "MEDILEKCACAK", "NATASA RANDJELOVIC", "RANDJELOVICPR"
     ],
     "🛒 Marketi": [
         "LIDL", "TEMPO", "MERCATOR", "KMN", "MAXI", "IDEA", "RODA",
@@ -73,22 +73,22 @@ CATEGORIES = {
     "⛽ Gorivo": [
         "NIS", "BENZINSKA", "LUKOIL", "MOL", "OMV", "PETROL", "GAZPROM"
     ],
+    "👗 Odeća i obuća": [
+        "ZARA", "BERSHKA", "FASHION", "H&M", "PULL&BEAR",
+        "STRADIVARIUS", "MASSIMO", "LC WAIKIKI", "NEW YORKER", "C&A",
+        "DEICHMANN", "OFFICE SHOES", "BUZZ", "SPORT VISION", "PLANETBIKE", "TOMTAILOR", "TOM TAILOR",
+        "TAKKO", "TAKKOFASHION", "KIDSBEBA", "PLANETASPORT", "PLANETA SPORT"
+    ],
     "📱 Računi i usluge": [
-        "VODOVOD", "KOMUNALAC", "SRBIJAGAS", "A1 SRBIJA", "A1 265", "A1",
+        "VODOVOD", "KOMUNALAC", "SRBIJAGAS", "A1 SRBIJA", "A1 265", "A1SRBIJA", "A1",
         "BROADBAND", "KABLOVSKE", "EPS", "INFOSTAN", "ELEKTRO",
         "BOR.DECE", "VRTIC", "PREDSKOLSK", "ALTAGROUP", "CORDIPS", "G.O.S.", "GENERALI",
-        "NAKNADA", "ODRZAVANJE RACUNA", "MESECNO ODRZAVANJE"
+        "NAKNADA", "ODRZAVANJE RACUNA", "MESECNO ODRZAVANJE", "STAMBENA"
     ],
     "🍔 Restorani i dostava": [
         "WOLT", "GLOVO", "DONESI", "BURRITO", "NICEFOODS", "RESTORAN",
         "CAFFE", "KAFE", "PICERIJA", "MCDONALDS", "KFC",
         "VELVET", "GALIJA", "CASTELLO", "GALLERY", "MORAVSKIALASI", "PEKARA", "PONS"
-    ],
-    "👗 Odeća i obuća": [
-        "ZARA", "BERSHKA", "FASHION", "H&M", "PULL&BEAR",
-        "STRADIVARIUS", "MASSIMO", "LC WAIKIKI", "NEW YORKER", "C&A",
-        "DEICHMANN", "OFFICE SHOES", "BUZZ", "SPORT VISION", "PLANETBIKE", "TOMTAILOR", "TOM TAILOR",
-        "TAKKO", "TAKKOFASHION"
     ],
     "💵 Gotovina (ATM)": [
         "ISPLATA GOTOVINE", "ATM"
@@ -152,9 +152,10 @@ BRAND_MAPPING = {
     "PUTEVI SRBIJE": ["PUTEVI SRBIJE"],
     "LAGUNA": ["LAGUNA"],
     "VULKAN": ["VULKAN"],
-    "BANCA INTESA ATM": ["BANCA INTESA"],
-    "MENJAČNICA (EUR)": ["PRODAJA"],
-    "A1": ["A1"],
+    "BANKOMAT PODIZANJE NOVCA": ["BANCA INTESA", "BANCAINTESA"],
+    "UPLATA NA DEVIZNI RAČUN": ["PRODAJA"],
+    "STAMBENA ZAJEDNICA": ["STAMBENA ZAJEDNICA", "STAMBENA"],
+    "A1": ["A1 SRBIJA", "A1 265", "A1SRBIJA"],
     "STRUJA (ALTA GROUP)": ["ALTAGROUP"],
     "MATIČNE ĆELIJE (CORD IPS)": ["CORDIPS"],
     "GENERALI OSIGURANJE": ["G.O.S.", "GENERALI"],
@@ -162,6 +163,7 @@ BRAND_MAPPING = {
     "STR JELENA": ["STKRJELENA", "STKR JELENA", "STR JELENA", "STRJELENA"],
     "ODRŽAVANJE RAČUNA": ["NAKNADA", "ODRZAVANJE RACUNA", "MESECNO ODRZAVANJE"],
     "MEDILAB": ["MEDILAB", "MEDILABCENTAR"],
+    "VRTIĆ NEVEN": ["BOR.DECE", "VRTIC", "PREDSKOLSK", "PRIH.OD"],
 }
 
 
@@ -372,6 +374,101 @@ def get_saved_periods():
     return periods
 
 
+def load_all_statements():
+    """Load all saved statements into one combined DataFrame."""
+    all_dfs = []
+    for period_dir in STATEMENTS_DIR.iterdir():
+        if period_dir.is_dir() and not period_dir.name.startswith('.'):
+            csv_path = period_dir / "transactions.csv"
+            if csv_path.exists():
+                df = pd.read_csv(csv_path)
+                df["Period"] = period_dir.name
+                all_dfs.append(df)
+
+    if all_dfs:
+        return pd.concat(all_dfs, ignore_index=True)
+    return pd.DataFrame()
+
+
+def display_global_stats(df):
+    """Display statistics across all periods."""
+    expenses_df = df[df["Isplata"] > 0].copy()
+
+    # Exclude "Ostalo" category from statistics
+    expenses_df = expenses_df[expenses_df["Kategorija"] != "❓ Ostalo"]
+
+    if expenses_df.empty:
+        st.info("Nema podataka za prikaz")
+        return
+
+    expenses_df["Brend"] = expenses_df.apply(
+        lambda row: normalize_merchant(row["Primalac/Platilac"], row["Opis"]), axis=1
+    )
+
+    # Monthly totals per category
+    monthly_cat = expenses_df.groupby(["Period", "Kategorija"])["Isplata"].sum().reset_index()
+    cat_stats = monthly_cat.groupby("Kategorija")["Isplata"].agg(["max", "mean", "sum"]).sort_values("sum", ascending=False)
+
+    top_category = cat_stats.index[0]
+    top_cat_max = cat_stats.loc[top_category, "max"]
+    top_cat_avg = cat_stats.loc[top_category, "mean"]
+
+    # Get top brand in top category
+    top_cat_df = expenses_df[expenses_df["Kategorija"] == top_category]
+    brand_totals = top_cat_df.groupby("Brend")["Isplata"].sum().sort_values(ascending=False)
+    top_brand = brand_totals.index[0]
+
+    # Display insights
+    st.subheader("🎯 Gde najviše trošiš?")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Kategorija #1:**")
+        st.markdown(f"### {top_category}")
+        st.caption(f"Max mesec: {top_cat_max:,.0f} RSD | Prosek/mesec: {top_cat_avg:,.0f} RSD")
+
+    with col2:
+        st.markdown("**Najviše u toj kategoriji:**")
+        st.markdown(f"### {top_brand}")
+
+    st.divider()
+
+    # Full ranking
+    st.subheader("📊 Rang lista kategorija")
+
+    for i, category in enumerate(cat_stats.index, 1):
+        cat_max = cat_stats.loc[category, "max"]
+        cat_avg = cat_stats.loc[category, "mean"]
+
+        # Get top brand for this category
+        cat_df = expenses_df[expenses_df["Kategorija"] == category]
+        cat_brands = cat_df.groupby("Brend")["Isplata"].sum().sort_values(ascending=False)
+        top_brand_in_cat = cat_brands.index[0] if len(cat_brands) > 0 else "-"
+
+        with st.expander(f"**#{i} {category}** — Max mesec: {cat_max:,.0f} RSD | Prosek/mesec: {cat_avg:,.0f} RSD"):
+            # Monthly stats for top brand
+            top_brand_monthly = expenses_df[(expenses_df["Kategorija"] == category) & (expenses_df["Brend"] == top_brand_in_cat)]
+            top_brand_monthly_totals = top_brand_monthly.groupby("Period")["Isplata"].sum()
+            top_brand_max = top_brand_monthly_totals.max() if len(top_brand_monthly_totals) > 0 else 0
+            top_brand_avg = top_brand_monthly_totals.mean() if len(top_brand_monthly_totals) > 0 else 0
+            st.markdown(f"🥇 **Najviše trošiš na:** {top_brand_in_cat} — Max mesec: {top_brand_max:,.0f} | Prosek/mesec: {top_brand_avg:,.0f} RSD")
+
+            if len(cat_brands) > 1:
+                st.caption("Ostali:")
+                for j, (brand, _) in enumerate(cat_brands.items()):
+                    if j == 0:
+                        continue
+                    if j > 5:
+                        st.caption(f"... i još {len(cat_brands) - 5} trgovaca")
+                        break
+                    # Monthly stats per brand
+                    brand_monthly = expenses_df[(expenses_df["Kategorija"] == category) & (expenses_df["Brend"] == brand)]
+                    brand_monthly_totals = brand_monthly.groupby("Period")["Isplata"].sum()
+                    brand_max = brand_monthly_totals.max()
+                    brand_avg = brand_monthly_totals.mean()
+                    st.write(f"• {brand} — Max mesec: {brand_max:,.0f} | Prosek/mesec: {brand_avg:,.0f} RSD")
+
+
 def create_export_data(df):
     """Create summary export data with categories and brands."""
     expenses_df = df[df["Isplata"] > 0].copy()
@@ -491,32 +588,38 @@ def main():
 
         # Upload section
         st.subheader("📤 Učitaj izvod")
+
+        # Initialize uploader key counter
+        if 'uploader_key' not in st.session_state:
+            st.session_state['uploader_key'] = 0
+
         uploaded_file = st.file_uploader(
             "PDF fajl",
             type="pdf",
             help="Banca Intesa mesečni izvod",
             label_visibility="collapsed",
-            key="pdf_uploader"
+            key=f"pdf_uploader_{st.session_state['uploader_key']}"
         )
 
+        # Show success message if just uploaded
+        if st.session_state.get('upload_success'):
+            st.success(f"✅ Uspešno učitan izvod: {st.session_state['upload_success']}")
+            del st.session_state['upload_success']
+
         if uploaded_file is not None:
-            file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+            pdf_bytes = uploaded_file.read()
+            original_filename = uploaded_file.name
 
-            # Check if we already processed this file
-            if st.session_state.get('last_processed_file') != file_id:
-                pdf_bytes = uploaded_file.read()
-                original_filename = uploaded_file.name
+            with st.spinner("Učitavam..."):
+                df_new = extract_transactions_from_pdf(BytesIO(pdf_bytes))
 
-                with st.spinner("Parsiram i čuvam..."):
-                    df_new = extract_transactions_from_pdf(BytesIO(pdf_bytes))
-
-                    if not df_new.empty:
-                        month, year = detect_statement_period(df_new)
-                        if month and year:
-                            save_statement(df_new, month, year, pdf_bytes, original_filename)
-                            st.session_state['last_processed_file'] = file_id
-                            st.success(f"✅ {get_month_name(month)} {year}")
-                            st.rerun()
+                if not df_new.empty:
+                    month, year = detect_statement_period(df_new)
+                    if month and year:
+                        save_statement(df_new, month, year, pdf_bytes, original_filename)
+                        st.session_state['upload_success'] = f"{get_month_name(month)} {year}"
+                        st.session_state['uploader_key'] += 1  # Reset uploader
+                        st.rerun()
 
         st.divider()
 
@@ -526,45 +629,67 @@ def main():
         if not saved_periods:
             st.info("Nema izvoda")
         else:
-            # Period selector
-            selected_key = st.radio(
-                "Odaberi period:",
-                options=[p["key"] for p in saved_periods],
-                format_func=lambda k: next(p["name"] for p in saved_periods if p["key"] == k),
-                label_visibility="collapsed"
+            # View mode selector
+            view_mode = st.radio(
+                "Prikaz:",
+                options=["pojedinacni", "statistika"],
+                format_func=lambda x: "📅 Pojedinačni mesec" if x == "pojedinacni" else "📊 Ukupna statistika",
+                horizontal=True
             )
 
-            # Delete button
-            if st.button("🗑️ Obriši odabrani", use_container_width=True):
-                if delete_statement(selected_key):
-                    st.rerun()
-
-            st.divider()
-
-            # Export button - uses session state to avoid regenerating Excel on every render
-            st.subheader("📥 Preuzmi")
-            if st.button("📊 Generiši Excel", use_container_width=True):
-                df_export, _ = load_statement(selected_key)
-                if df_export is not None:
-                    selected_name = next(p["name"] for p in saved_periods if p["key"] == selected_key)
-                    st.session_state['excel_data'] = create_excel_export(df_export, selected_name)
-                    st.session_state['excel_filename'] = f"izvod_{selected_key}.xlsx"
-
-            if 'excel_data' in st.session_state:
-                st.download_button(
-                    "⬇️ Preuzmi Excel",
-                    st.session_state['excel_data'],
-                    st.session_state['excel_filename'],
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
+            selected_key = None
+            if view_mode == "pojedinacni":
+                # Period selector
+                selected_key = st.radio(
+                    "Odaberi period:",
+                    options=[p["key"] for p in saved_periods],
+                    format_func=lambda k: next(p["name"] for p in saved_periods if p["key"] == k),
+                    label_visibility="collapsed"
                 )
+
+            if view_mode == "pojedinacni" and selected_key:
+                # Delete button
+                if st.button("🗑️ Obriši odabrani", use_container_width=True):
+                    if delete_statement(selected_key):
+                        st.rerun()
+
+                st.divider()
+
+                # Export button
+                st.subheader("📥 Preuzmi")
+                if st.button("📊 Generiši Excel", use_container_width=True):
+                    df_export, _ = load_statement(selected_key)
+                    if df_export is not None:
+                        selected_name = next(p["name"] for p in saved_periods if p["key"] == selected_key)
+                        st.session_state['excel_data'] = create_excel_export(df_export, selected_name)
+                        st.session_state['excel_filename'] = f"izvod_{selected_key}.xlsx"
+
+                if 'excel_data' in st.session_state:
+                    st.download_button(
+                        "⬇️ Preuzmi Excel",
+                        st.session_state['excel_data'],
+                        st.session_state['excel_filename'],
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
 
 
     # ===== MAIN CONTENT =====
     if not saved_periods:
         st.markdown('<h1 class="troskomer-logo">Troškomer</h1>', unsafe_allow_html=True)
         st.info("👈 Učitaj prvi izvod preko sidebar-a")
-    elif 'selected_key' not in dir() or selected_key is None:
+    elif view_mode == "statistika":
+        # Big statistics header
+        stats_logo = """<svg width="80" height="80" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="45" fill="#1a1a2e" stroke="#667eea" stroke-width="3"/><rect x="20" y="55" width="12" height="25" fill="#667eea" rx="2"/><rect x="37" y="40" width="12" height="40" fill="#764ba2" rx="2"/><rect x="54" y="30" width="12" height="50" fill="#667eea" rx="2"/><rect x="71" y="20" width="12" height="60" fill="#764ba2" rx="2"/></svg>"""
+
+        st.markdown(f'<div style="display: flex; align-items: center; gap: 20px; margin-bottom: 20px;">{stats_logo}<div><h1 style="margin: 0; font-size: 36px; font-weight: 800;">Ukupna Statistika</h1><p style="margin: 5px 0 0 0; font-size: 18px; color: #666;">Analiza svih učitanih izvoda</p></div></div>', unsafe_allow_html=True)
+        st.divider()
+        all_df = load_all_statements()
+        if not all_df.empty:
+            display_global_stats(all_df)
+        else:
+            st.info("Nema podataka")
+    elif selected_key is None:
         st.markdown('<h1 class="troskomer-logo">Troškomer</h1>', unsafe_allow_html=True)
         st.info("👈 Odaberi izvod iz liste")
     else:

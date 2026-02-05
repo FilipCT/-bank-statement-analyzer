@@ -9,6 +9,106 @@ from datetime import datetime
 from pathlib import Path
 import xlsxwriter
 
+# Google Drive imports
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+    GDRIVE_AVAILABLE = True
+except ImportError:
+    GDRIVE_AVAILABLE = False
+
+
+def get_gdrive_service():
+    """Initialize Google Drive service from Streamlit secrets."""
+    if not GDRIVE_AVAILABLE:
+        return None
+
+    try:
+        credentials = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=['https://www.googleapis.com/auth/drive']
+        )
+        service = build('drive', 'v3', credentials=credentials)
+        return service
+    except Exception as e:
+        st.warning(f"Google Drive nije dostupan: {e}")
+        return None
+
+
+def get_gdrive_folder_id():
+    """Get the Google Drive folder ID from secrets."""
+    try:
+        return st.secrets["gdrive"]["folder_id"]
+    except:
+        return None
+
+
+def gdrive_find_file(service, filename, parent_id):
+    """Find a file in Google Drive by name and parent folder."""
+    query = f"name='{filename}' and '{parent_id}' in parents and trashed=false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    files = results.get('files', [])
+    return files[0]['id'] if files else None
+
+
+def gdrive_find_or_create_folder(service, folder_name, parent_id):
+    """Find or create a folder in Google Drive."""
+    # Check if folder exists
+    file_id = gdrive_find_file(service, folder_name, parent_id)
+    if file_id:
+        return file_id
+
+    # Create folder
+    file_metadata = {
+        'name': folder_name,
+        'mimeType': 'application/vnd.google-apps.folder',
+        'parents': [parent_id]
+    }
+    folder = service.files().create(body=file_metadata, fields='id').execute()
+    return folder['id']
+
+
+def gdrive_upload_file(service, filename, content, parent_id, mime_type='text/csv'):
+    """Upload or update a file in Google Drive."""
+    # Check if file exists
+    file_id = gdrive_find_file(service, filename, parent_id)
+
+    media = MediaIoBaseUpload(BytesIO(content.encode('utf-8') if isinstance(content, str) else content),
+                               mimetype=mime_type, resumable=True)
+
+    if file_id:
+        # Update existing file
+        service.files().update(fileId=file_id, media_body=media).execute()
+    else:
+        # Create new file
+        file_metadata = {'name': filename, 'parents': [parent_id]}
+        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+
+def gdrive_download_file(service, file_id):
+    """Download a file from Google Drive."""
+    request = service.files().get_media(fileId=file_id)
+    file_buffer = BytesIO()
+    downloader = MediaIoBaseDownload(file_buffer, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    file_buffer.seek(0)
+    return file_buffer.read().decode('utf-8')
+
+
+def gdrive_list_folders(service, parent_id):
+    """List all folders in a parent folder."""
+    query = f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    return results.get('files', [])
+
+
+def gdrive_delete_folder(service, folder_id):
+    """Delete a folder from Google Drive."""
+    service.files().delete(fileId=folder_id).execute()
+
 # Page config
 st.set_page_config(
     page_title="Troškomer",
@@ -297,11 +397,15 @@ def detect_statement_period(df):
 def save_statement(df, month, year, pdf_bytes=None, filename=None):
     """Save parsed statement data and optionally the PDF."""
     period_key = f"{year}-{month:02d}"
+
+    # Save locally
     period_dir = STATEMENTS_DIR / period_key
     period_dir.mkdir(exist_ok=True)
 
+    csv_content = df.to_csv(index=False)
     csv_path = period_dir / "transactions.csv"
-    df.to_csv(csv_path, index=False)
+    with open(csv_path, "w", encoding="utf-8") as f:
+        f.write(csv_content)
 
     if pdf_bytes:
         pdf_path = period_dir / "statement.pdf"
@@ -318,44 +422,109 @@ def save_statement(df, month, year, pdf_bytes=None, filename=None):
         "original_filename": filename or "statement.pdf",
         "saved_at": datetime.now().isoformat()
     }
+    metadata_content = json.dumps(metadata, ensure_ascii=False, indent=2)
     with open(period_dir / "metadata.json", "w", encoding="utf-8") as f:
-        json.dump(metadata, f, ensure_ascii=False, indent=2)
+        f.write(metadata_content)
+
+    # Also save to Google Drive if available
+    service = get_gdrive_service()
+    folder_id = get_gdrive_folder_id()
+    if service and folder_id:
+        try:
+            # Create period folder on Drive
+            period_folder_id = gdrive_find_or_create_folder(service, period_key, folder_id)
+            # Upload CSV
+            gdrive_upload_file(service, "transactions.csv", csv_content, period_folder_id)
+            # Upload metadata
+            gdrive_upload_file(service, "metadata.json", metadata_content, period_folder_id, 'application/json')
+        except Exception as e:
+            st.warning(f"Greška pri čuvanju na Google Drive: {e}")
 
     return period_key
 
 
 def load_statement(period_key):
-    """Load a saved statement."""
+    """Load a saved statement. Try local first, then Google Drive."""
     period_dir = STATEMENTS_DIR / period_key
-
     csv_path = period_dir / "transactions.csv"
-    if not csv_path.exists():
-        return None, None
-
-    df = pd.read_csv(csv_path)
-
     metadata_path = period_dir / "metadata.json"
-    metadata = None
-    if metadata_path.exists():
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
 
-    return df, metadata
+    # Try local first
+    if csv_path.exists():
+        df = pd.read_csv(csv_path)
+        metadata = None
+        if metadata_path.exists():
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        return df, metadata
+
+    # Try Google Drive if local not found
+    service = get_gdrive_service()
+    folder_id = get_gdrive_folder_id()
+    if service and folder_id:
+        try:
+            # Find the period folder on Drive
+            period_folder_id = gdrive_find_file(service, period_key, folder_id)
+            if period_folder_id:
+                # Download CSV
+                csv_file_id = gdrive_find_file(service, "transactions.csv", period_folder_id)
+                if csv_file_id:
+                    csv_content = gdrive_download_file(service, csv_file_id)
+                    df = pd.read_csv(BytesIO(csv_content.encode('utf-8')))
+
+                    # Download metadata
+                    metadata = None
+                    metadata_file_id = gdrive_find_file(service, "metadata.json", period_folder_id)
+                    if metadata_file_id:
+                        metadata_content = gdrive_download_file(service, metadata_file_id)
+                        metadata = json.loads(metadata_content)
+
+                    # Cache locally for faster access next time
+                    period_dir.mkdir(exist_ok=True)
+                    df.to_csv(csv_path, index=False)
+                    if metadata:
+                        with open(metadata_path, "w", encoding="utf-8") as f:
+                            json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+                    return df, metadata
+        except Exception as e:
+            st.warning(f"Greška pri učitavanju sa Google Drive: {e}")
+
+    return None, None
 
 
 def delete_statement(period_key):
-    """Delete a saved statement."""
+    """Delete a saved statement from local and Google Drive."""
     import shutil
+    deleted = False
+
+    # Delete from local
     period_dir = STATEMENTS_DIR / period_key
     if period_dir.exists():
         shutil.rmtree(period_dir)
-        return True
-    return False
+        deleted = True
+
+    # Delete from Google Drive
+    service = get_gdrive_service()
+    folder_id = get_gdrive_folder_id()
+    if service and folder_id:
+        try:
+            period_folder_id = gdrive_find_file(service, period_key, folder_id)
+            if period_folder_id:
+                gdrive_delete_folder(service, period_folder_id)
+                deleted = True
+        except Exception as e:
+            st.warning(f"Greška pri brisanju sa Google Drive: {e}")
+
+    return deleted
 
 
 def recategorize_all_statements():
-    """Re-apply categorization rules to all saved statements."""
+    """Re-apply categorization rules to all saved statements and sync to Google Drive."""
     count = 0
+    service = get_gdrive_service()
+    folder_id = get_gdrive_folder_id()
+
     for period_dir in STATEMENTS_DIR.iterdir():
         if period_dir.is_dir() and not period_dir.name.startswith('.'):
             csv_path = period_dir / "transactions.csv"
@@ -366,53 +535,112 @@ def recategorize_all_statements():
                     lambda row: categorize_transaction(row["Opis"], row["Primalac/Platilac"]),
                     axis=1
                 )
-                # Save updated CSV
-                df.to_csv(csv_path, index=False)
+                # Save updated CSV locally
+                csv_content = df.to_csv(index=False)
+                with open(csv_path, "w", encoding="utf-8") as f:
+                    f.write(csv_content)
 
                 # Update metadata
                 metadata_path = period_dir / "metadata.json"
+                metadata_content = None
                 if metadata_path.exists():
                     with open(metadata_path, "r", encoding="utf-8") as f:
                         metadata = json.load(f)
                     metadata["total_expenses"] = float(df[df["Isplata"] > 0]["Isplata"].sum())
                     metadata["total_income"] = float(df[df["Uplata"] > 0]["Uplata"].sum())
+                    metadata_content = json.dumps(metadata, ensure_ascii=False, indent=2)
                     with open(metadata_path, "w", encoding="utf-8") as f:
-                        json.dump(metadata, f, ensure_ascii=False, indent=2)
+                        f.write(metadata_content)
+
+                # Sync to Google Drive
+                if service and folder_id:
+                    try:
+                        period_folder_id = gdrive_find_or_create_folder(service, period_dir.name, folder_id)
+                        gdrive_upload_file(service, "transactions.csv", csv_content, period_folder_id)
+                        if metadata_content:
+                            gdrive_upload_file(service, "metadata.json", metadata_content, period_folder_id, 'application/json')
+                    except Exception as e:
+                        st.warning(f"Greška pri sinhronizaciji {period_dir.name} na Google Drive: {e}")
+
                 count += 1
     return count
 
 
 def get_saved_periods():
-    """Get list of all saved statement periods."""
-    periods = []
-    for period_dir in sorted(STATEMENTS_DIR.iterdir(), reverse=True):
-        if period_dir.is_dir() and not period_dir.name.startswith('.'):
-            metadata_path = period_dir / "metadata.json"
-            if metadata_path.exists():
-                with open(metadata_path, "r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-                    periods.append({
-                        "key": period_dir.name,
-                        "name": metadata.get("period_name", period_dir.name),
-                        "expenses": metadata.get("total_expenses", 0),
-                        "income": metadata.get("total_income", 0),
-                        "transactions": metadata.get("total_transactions", 0),
-                        "filename": metadata.get("original_filename", ""),
-                        "saved_at": metadata.get("saved_at", "")
-                    })
+    """Get list of all saved statement periods from local and Google Drive."""
+    periods_dict = {}
+
+    # Get local periods
+    if STATEMENTS_DIR.exists():
+        for period_dir in STATEMENTS_DIR.iterdir():
+            if period_dir.is_dir() and not period_dir.name.startswith('.'):
+                metadata_path = period_dir / "metadata.json"
+                if metadata_path.exists():
+                    with open(metadata_path, "r", encoding="utf-8") as f:
+                        metadata = json.load(f)
+                        periods_dict[period_dir.name] = {
+                            "key": period_dir.name,
+                            "name": metadata.get("period_name", period_dir.name),
+                            "expenses": metadata.get("total_expenses", 0),
+                            "income": metadata.get("total_income", 0),
+                            "transactions": metadata.get("total_transactions", 0),
+                            "filename": metadata.get("original_filename", ""),
+                            "saved_at": metadata.get("saved_at", "")
+                        }
+
+    # Also check Google Drive for periods not available locally
+    service = get_gdrive_service()
+    folder_id = get_gdrive_folder_id()
+    if service and folder_id:
+        try:
+            gdrive_folders = gdrive_list_folders(service, folder_id)
+            for folder in gdrive_folders:
+                period_key = folder['name']
+                if period_key not in periods_dict:
+                    # Try to get metadata from Drive
+                    try:
+                        metadata_file_id = gdrive_find_file(service, "metadata.json", folder['id'])
+                        if metadata_file_id:
+                            metadata_content = gdrive_download_file(service, metadata_file_id)
+                            metadata = json.loads(metadata_content)
+                            periods_dict[period_key] = {
+                                "key": period_key,
+                                "name": metadata.get("period_name", period_key),
+                                "expenses": metadata.get("total_expenses", 0),
+                                "income": metadata.get("total_income", 0),
+                                "transactions": metadata.get("total_transactions", 0),
+                                "filename": metadata.get("original_filename", ""),
+                                "saved_at": metadata.get("saved_at", "")
+                            }
+                    except:
+                        # If can't read metadata, add with basic info
+                        periods_dict[period_key] = {
+                            "key": period_key,
+                            "name": period_key,
+                            "expenses": 0,
+                            "income": 0,
+                            "transactions": 0,
+                            "filename": "",
+                            "saved_at": ""
+                        }
+        except Exception as e:
+            pass  # Silently fail, local data will still work
+
+    # Sort by key (date) descending
+    periods = sorted(periods_dict.values(), key=lambda x: x["key"], reverse=True)
     return periods
 
 
 def load_all_statements():
-    """Load all saved statements into one combined DataFrame."""
+    """Load all saved statements into one combined DataFrame (local + Google Drive)."""
     all_dfs = []
-    for period_dir in STATEMENTS_DIR.iterdir():
-        if period_dir.is_dir() and not period_dir.name.startswith('.'):
-            csv_path = period_dir / "transactions.csv"
-            if csv_path.exists():
-                df = pd.read_csv(csv_path)
-                df["Period"] = period_dir.name
-                all_dfs.append(df)
+    periods = get_saved_periods()
+
+    for period in periods:
+        df, _ = load_statement(period["key"])
+        if df is not None:
+            df["Period"] = period["key"]
+            all_dfs.append(df)
 
     if all_dfs:
         return pd.concat(all_dfs, ignore_index=True)

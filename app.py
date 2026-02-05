@@ -47,6 +47,84 @@ st.markdown(f"""
         color: #666 !important;
         margin-top: -5px !important;
     }}
+
+    /* ===== RESPONSIVE / MOBILE STYLES ===== */
+    @media (max-width: 768px) {{
+        /* Smaller logo text on mobile */
+        .troskomer-logo {{
+            font-size: 28px !important;
+        }}
+
+        /* Make metrics more compact */
+        [data-testid="stMetric"] {{
+            padding: 8px !important;
+        }}
+        [data-testid="stMetricValue"] {{
+            font-size: 18px !important;
+        }}
+        [data-testid="stMetricLabel"] {{
+            font-size: 12px !important;
+        }}
+        [data-testid="stMetricDelta"] {{
+            font-size: 11px !important;
+        }}
+
+        /* Smaller headings */
+        h1 {{
+            font-size: 24px !important;
+        }}
+        h2 {{
+            font-size: 20px !important;
+        }}
+        h3 {{
+            font-size: 18px !important;
+        }}
+
+        /* Expander styling */
+        .streamlit-expanderHeader {{
+            font-size: 14px !important;
+        }}
+
+        /* Make tables scrollable */
+        [data-testid="stDataFrame"] {{
+            overflow-x: auto !important;
+        }}
+
+        /* Reduce padding in main content */
+        .main .block-container {{
+            padding: 1rem 0.5rem !important;
+        }}
+
+        /* Stats header smaller on mobile */
+        .stats-header h1 {{
+            font-size: 22px !important;
+        }}
+        .stats-header p {{
+            font-size: 14px !important;
+        }}
+    }}
+
+    /* Even smaller screens (phones in portrait) */
+    @media (max-width: 480px) {{
+        .troskomer-logo {{
+            font-size: 24px !important;
+        }}
+        [data-testid="stMetricValue"] {{
+            font-size: 16px !important;
+        }}
+        h1 {{
+            font-size: 20px !important;
+        }}
+        h2 {{
+            font-size: 18px !important;
+        }}
+
+        /* Stack columns vertically */
+        [data-testid="column"] {{
+            width: 100% !important;
+            flex: 1 1 100% !important;
+        }}
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -452,18 +530,15 @@ def display_global_stats(df):
     brand_totals = top_cat_df.groupby("Brend")["Isplata"].sum().sort_values(ascending=False)
     top_brand = brand_totals.index[0]
 
-    # Display insights
+    # Display insights - mobile friendly layout
     st.subheader("🎯 Gde najviše trošiš?")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Kategorija #1:**")
-        st.markdown(f"### {top_category}")
-        st.caption(f"Max mesec: {top_cat_max:,.0f} RSD | Prosek/mesec: {top_cat_avg:,.0f} RSD")
+    st.markdown("**Kategorija #1:**")
+    st.markdown(f"### {top_category}")
+    st.caption(f"Max: {top_cat_max:,.0f} RSD | Prosek: {top_cat_avg:,.0f} RSD/mesec")
 
-    with col2:
-        st.markdown("**Najviše u toj kategoriji:**")
-        st.markdown(f"### {top_brand}")
+    st.markdown("**Najviše trošiš na:**")
+    st.markdown(f"### {top_brand}")
 
     st.divider()
 
@@ -479,28 +554,29 @@ def display_global_stats(df):
         cat_brands = cat_df.groupby("Brend")["Isplata"].sum().sort_values(ascending=False)
         top_brand_in_cat = cat_brands.index[0] if len(cat_brands) > 0 else "-"
 
-        with st.expander(f"**#{i} {category}** — Max mesec: {cat_max:,.0f} RSD | Prosek/mesec: {cat_avg:,.0f} RSD"):
+        with st.expander(f"**#{i} {category}** — {cat_max:,.0f} / {cat_avg:,.0f} RSD"):
+            st.caption("Max mesec / Prosek mesečno")
             # Monthly stats for top brand
             top_brand_monthly = expenses_df[(expenses_df["Kategorija"] == category) & (expenses_df["Brend"] == top_brand_in_cat)]
             top_brand_monthly_totals = top_brand_monthly.groupby("Period")["Isplata"].sum()
             top_brand_max = top_brand_monthly_totals.max() if len(top_brand_monthly_totals) > 0 else 0
             top_brand_avg = top_brand_monthly_totals.mean() if len(top_brand_monthly_totals) > 0 else 0
-            st.markdown(f"🥇 **Najviše trošiš na:** {top_brand_in_cat} — Max mesec: {top_brand_max:,.0f} | Prosek/mesec: {top_brand_avg:,.0f} RSD")
+            st.markdown(f"🥇 **{top_brand_in_cat}** — {top_brand_max:,.0f} / {top_brand_avg:,.0f} RSD")
 
             if len(cat_brands) > 1:
-                st.caption("Ostali:")
+                st.caption("Ostali trgovci:")
                 for j, (brand, _) in enumerate(cat_brands.items()):
                     if j == 0:
                         continue
                     if j > 5:
-                        st.caption(f"... i još {len(cat_brands) - 5} trgovaca")
+                        st.caption(f"... i još {len(cat_brands) - 5}")
                         break
                     # Monthly stats per brand
                     brand_monthly = expenses_df[(expenses_df["Kategorija"] == category) & (expenses_df["Brend"] == brand)]
                     brand_monthly_totals = brand_monthly.groupby("Period")["Isplata"].sum()
                     brand_max = brand_monthly_totals.max()
                     brand_avg = brand_monthly_totals.mean()
-                    st.write(f"• {brand} — Max mesec: {brand_max:,.0f} | Prosek/mesec: {brand_avg:,.0f} RSD")
+                    st.write(f"• {brand} — {brand_max:,.0f} / {brand_avg:,.0f}")
 
 
 def create_export_data(df):
@@ -558,12 +634,14 @@ def display_statement(df, period_name=None):
     total_income = income_df["Uplata"].sum()
     balance = total_income - total_expenses
 
-    # Metrics row
-    col1, col2, col3, col4 = st.columns(4)
+    # Metrics row - 2x2 grid works better on mobile
+    col1, col2 = st.columns(2)
     with col1:
         st.metric("💵 Primanja", f"{total_income:,.0f} RSD")
     with col2:
         st.metric("💸 Potrošnja", f"{total_expenses:,.0f} RSD")
+
+    col3, col4 = st.columns(2)
     with col3:
         st.metric("📊 Bilans", f"{balance:,.0f} RSD", delta=f"{balance:,.0f}")
     with col4:
@@ -581,7 +659,7 @@ def display_statement(df, period_name=None):
         total = category_totals.loc[category, "Ukupno (RSD)"]
         count = int(category_totals.loc[category, "Br. transakcija"])
 
-        with st.expander(f"{category} — **{total:,.2f} RSD** ({count} transakcija)"):
+        with st.expander(f"{category} — **{total:,.0f} RSD** ({count})"):
             cat_transactions = expenses_df[expenses_df["Kategorija"] == category].copy()
             cat_transactions["Brend"] = cat_transactions.apply(
                 lambda row: normalize_merchant(row["Primalac/Platilac"], row["Opis"]), axis=1
@@ -596,7 +674,7 @@ def display_statement(df, period_name=None):
                 brand_total = merchant_totals.loc[brand, "Ukupno (RSD)"]
                 brand_count = int(merchant_totals.loc[brand, "Br. kupovina"])
 
-                with st.expander(f"**{brand}** — {brand_total:,.2f} RSD ({brand_count} kupovina)"):
+                with st.expander(f"**{brand}** — {brand_total:,.0f} RSD ({brand_count})"):
                     brand_transactions = cat_transactions[cat_transactions["Brend"] == brand][
                         ["Datum", "Opis", "Isplata", "Primalac/Platilac"]
                     ].copy()
@@ -728,10 +806,10 @@ def main():
         st.markdown('<h1 class="troskomer-logo">Troškomer</h1>', unsafe_allow_html=True)
         st.info("👈 Učitaj prvi izvod preko sidebar-a")
     elif view_mode == "statistika":
-        # Big statistics header
-        stats_logo = """<svg width="80" height="80" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="45" fill="#1a1a2e" stroke="#667eea" stroke-width="3"/><rect x="20" y="55" width="12" height="25" fill="#667eea" rx="2"/><rect x="37" y="40" width="12" height="40" fill="#764ba2" rx="2"/><rect x="54" y="30" width="12" height="50" fill="#667eea" rx="2"/><rect x="71" y="20" width="12" height="60" fill="#764ba2" rx="2"/></svg>"""
+        # Big statistics header - responsive
+        stats_logo = """<svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="45" fill="#1a1a2e" stroke="#667eea" stroke-width="3"/><rect x="20" y="55" width="12" height="25" fill="#667eea" rx="2"/><rect x="37" y="40" width="12" height="40" fill="#764ba2" rx="2"/><rect x="54" y="30" width="12" height="50" fill="#667eea" rx="2"/><rect x="71" y="20" width="12" height="60" fill="#764ba2" rx="2"/></svg>"""
 
-        st.markdown(f'<div style="display: flex; align-items: center; gap: 20px; margin-bottom: 20px;">{stats_logo}<div><h1 style="margin: 0; font-size: 36px; font-weight: 800;">Ukupna Statistika</h1><p style="margin: 5px 0 0 0; font-size: 18px; color: #666;">Analiza svih učitanih izvoda</p></div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="stats-header" style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px; flex-wrap: wrap;">{stats_logo}<div><h1 style="margin: 0; font-size: 28px; font-weight: 800;">Ukupna Statistika</h1><p style="margin: 5px 0 0 0; font-size: 14px; color: #666;">Analiza svih učitanih izvoda</p></div></div>', unsafe_allow_html=True)
         st.divider()
         all_df = load_all_statements()
         if not all_df.empty:

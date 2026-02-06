@@ -229,18 +229,15 @@ st.markdown(f"""
         font-size: 14px;
     }}
 
-    /* ===== PAGE LOGO HEADER (faded) ===== */
+    /* ===== PAGE LOGO HEADER (faded, left aligned) ===== */
     .page-logo {{
         display: flex;
         align-items: center;
-        justify-content: center;
+        justify-content: flex-start;
         gap: 12px;
         padding: 8px 0;
         margin: 0 0 16px 0;
         opacity: 0.25;
-    }}
-    .page-logo svg {{
-        filter: grayscale(100%);
     }}
     .page-logo-text {{
         font-size: 36px;
@@ -248,6 +245,7 @@ st.markdown(f"""
         color: #333;
         letter-spacing: -1px;
     }}
+
 
     @media (max-width: 768px) {{
         .month-header h1 {{
@@ -259,6 +257,7 @@ st.markdown(f"""
     }}
 </style>
 """, unsafe_allow_html=True)
+
 
 # Data storage folder
 DATA_DIR = Path(__file__).parent / "data"
@@ -272,7 +271,7 @@ CATEGORIES = {
         "LILLY", "APOTEKA", "VIDAKOVI", "VUCKOVIC", "KRSENKOVIC", "BENU"
     ],
     "🩺 Zdravstveni pregledi i analize": [
-        "MEDILAB", "DRPISCEVIC", "DR PISCEVIC", "MEDILEK", "MEDILEKCACAK", "NATASA RANDJELOVIC", "RANDJELOVICPR"
+        "MEDILAB", "DRPISCEVIC", "DR PISCEVIC", "MEDILEK", "MEDILEKCACAK", "NATASA RANDJELOVIC", "RANDJELOVICPR", "FIZIOKINETIKPR"
     ],
     "🛒 Marketi": [
         "LIDL", "TEMPO", "MERCATOR", "KMN", "MAXI", "IDEA", "RODA",
@@ -286,9 +285,10 @@ CATEGORIES = {
     ],
     "👗 Odeća i obuća": [
         "ZARA", "BERSHKA", "FASHION", "H&M", "PULL&BEAR",
-        "STRADIVARIUS", "MASSIMO", "LC WAIKIKI", "NEW YORKER", "C&A",
+        "STRADIVARIUS", "MASSIMO", "LC WAIKIKI", "NEW YORKER", "NEWYORKER", "C&A",
         "DEICHMANN", "OFFICE SHOES", "BUZZ", "SPORT VISION", "PLANETBIKE", "TOMTAILOR", "TOM TAILOR",
-        "TAKKO", "TAKKOFASHION", "KIDSBEBA", "PLANETASPORT", "PLANETA SPORT"
+        "TAKKO", "TAKKOFASHION", "KIDSBEBA", "PLANETASPORT", "PLANETA SPORT",
+        "JASMILPROD", "WOODLINE032"
     ],
     "📱 Računi i usluge": [
         "VODOVOD", "KOMUNALAC", "SRBIJAGAS", "A1 SRBIJA", "A1 265", "A1SRBIJA", "A1",
@@ -299,7 +299,9 @@ CATEGORIES = {
     "🍔 Restorani i dostava": [
         "WOLT", "GLOVO", "DONESI", "BURRITO", "NICEFOODS", "RESTORAN",
         "CAFFE", "KAFE", "PICERIJA", "MCDONALDS", "KFC",
-        "VELVET", "GALIJA", "CASTELLO", "GALLERY", "MORAVSKIALASI", "PEKARA", "PONS"
+        "VELVET", "GALIJA", "CASTELLO", "GALLERY", "MORAVSKIALASI", "PEKARA", "PONS",
+        "RICHARDGYROS", "ISHRANADOO", "ASIAFOODDOO", "ESSORRISO",
+        "LANTERNACACAK", "KOFI", "KAFANAPALILULE"
     ],
     "💵 Gotovina (ATM)": [
         "ISPLATA GOTOVINE", "ATM"
@@ -634,6 +636,15 @@ def load_all_statements():
     return pd.DataFrame()
 
 
+def period_to_name(period_key):
+    """Convert period key (2025-12) to name (Decembar 2025)."""
+    try:
+        year, month = period_key.split("-")
+        return f"{get_month_name(int(month))} {year}"
+    except:
+        return period_key
+
+
 def display_global_stats(df):
     """Display statistics across all periods."""
     expenses_df = df[df["Isplata"] > 0].copy()
@@ -651,11 +662,23 @@ def display_global_stats(df):
 
     # Monthly totals per category
     monthly_cat = expenses_df.groupby(["Period", "Kategorija"])["Isplata"].sum().reset_index()
-    cat_stats = monthly_cat.groupby("Kategorija")["Isplata"].agg(["max", "mean", "sum"]).sort_values("sum", ascending=False)
+    # Only count months with actual spending for the average
+    cat_stats = monthly_cat[monthly_cat["Isplata"] > 0].groupby("Kategorija")["Isplata"].agg(["max", "mean", "sum"]).sort_values("max", ascending=False)
+
+    # Find which month had max for each category
+    cat_max_months = {}
+    for category in cat_stats.index:
+        cat_monthly = monthly_cat[monthly_cat["Kategorija"] == category].set_index("Period")["Isplata"]
+        if len(cat_monthly) > 0:
+            max_period = cat_monthly.idxmax()
+            cat_max_months[category] = period_to_name(max_period)
+        else:
+            cat_max_months[category] = "-"
 
     top_category = cat_stats.index[0]
     top_cat_max = cat_stats.loc[top_category, "max"]
     top_cat_avg = cat_stats.loc[top_category, "mean"]
+    top_cat_max_month = cat_max_months[top_category]
 
     # Get top brand in top category
     top_cat_df = expenses_df[expenses_df["Kategorija"] == top_category]
@@ -667,7 +690,7 @@ def display_global_stats(df):
 
     st.markdown("**Kategorija #1:**")
     st.markdown(f"### {top_category}")
-    st.caption(f"Max: {top_cat_max:,.0f} RSD | Prosek: {top_cat_avg:,.0f} RSD/mesec")
+    st.caption(f"Max: {top_cat_max:,.0f} RSD ({top_cat_max_month}) | Prosek: {top_cat_avg:,.0f} RSD/mesec")
 
     st.markdown("**Najviše trošiš na:**")
     st.markdown(f"### {top_brand}")
@@ -680,6 +703,7 @@ def display_global_stats(df):
     for i, category in enumerate(cat_stats.index, 1):
         cat_max = cat_stats.loc[category, "max"]
         cat_avg = cat_stats.loc[category, "mean"]
+        cat_max_month = cat_max_months[category]
 
         # Get top brand for this category
         cat_df = expenses_df[expenses_df["Kategorija"] == category]
@@ -687,13 +711,14 @@ def display_global_stats(df):
         top_brand_in_cat = cat_brands.index[0] if len(cat_brands) > 0 else "-"
 
         with st.expander(f"**#{i} {category}** — {cat_max:,.0f} / {cat_avg:,.0f} RSD"):
-            st.caption("Max mesec / Prosek mesečno")
+            st.caption(f"Max: {cat_max:,.0f} RSD ({cat_max_month}) | Prosek: {cat_avg:,.0f} RSD/mesec")
             # Monthly stats for top brand
             top_brand_monthly = expenses_df[(expenses_df["Kategorija"] == category) & (expenses_df["Brend"] == top_brand_in_cat)]
             top_brand_monthly_totals = top_brand_monthly.groupby("Period")["Isplata"].sum()
             top_brand_max = top_brand_monthly_totals.max() if len(top_brand_monthly_totals) > 0 else 0
             top_brand_avg = top_brand_monthly_totals.mean() if len(top_brand_monthly_totals) > 0 else 0
-            st.markdown(f"🥇 **{top_brand_in_cat}** — {top_brand_max:,.0f} / {top_brand_avg:,.0f} RSD")
+            top_brand_max_month = period_to_name(top_brand_monthly_totals.idxmax()) if len(top_brand_monthly_totals) > 0 else "-"
+            st.markdown(f"🥇 **{top_brand_in_cat}** — {top_brand_max:,.0f} ({top_brand_max_month}) / {top_brand_avg:,.0f} RSD")
 
             if len(cat_brands) > 1:
                 st.caption("Ostali trgovci:")
@@ -708,7 +733,8 @@ def display_global_stats(df):
                     brand_monthly_totals = brand_monthly.groupby("Period")["Isplata"].sum()
                     brand_max = brand_monthly_totals.max()
                     brand_avg = brand_monthly_totals.mean()
-                    st.write(f"• {brand} — {brand_max:,.0f} / {brand_avg:,.0f}")
+                    brand_max_month = period_to_name(brand_monthly_totals.idxmax()) if len(brand_monthly_totals) > 0 else "-"
+                    st.write(f"• {brand} — {brand_max:,.0f} ({brand_max_month}) / {brand_avg:,.0f}")
 
 
 def create_export_data(df):

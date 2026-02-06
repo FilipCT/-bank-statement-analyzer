@@ -322,6 +322,36 @@ st.markdown("""
         caret-color: transparent !important;
     }
 
+    /* ===== MONTH NAVIGATION - RESPONSIVE ===== */
+    /* Mobile: fancy circular arrows */
+    @media (max-width: 768px) {
+        .main .stButton button[kind="secondary"] {
+            font-size: 20px !important;
+            padding: 8px 12px !important;
+            border-radius: 50% !important;
+            width: 44px !important;
+            height: 44px !important;
+            min-height: 44px !important;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            border: none !important;
+            color: white !important;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.25) !important;
+            transition: all 0.3s ease !important;
+            overflow: hidden !important;
+        }
+        .main .stButton button[kind="secondary"]:hover {
+            transform: scale(1.1) !important;
+            box-shadow: 0 6px 18px rgba(102, 126, 234, 0.35) !important;
+        }
+        /* Hide month name text on mobile, show only arrow */
+        .main .stButton button[kind="secondary"] p {
+            font-size: 0 !important;
+        }
+        .main .stButton button[kind="secondary"] p::first-letter {
+            font-size: 20px !important;
+        }
+    }
+
     /* ===== RESPONSIVE ===== */
     @media (max-width: 768px) {
         .intesa-card-amount {
@@ -335,6 +365,32 @@ st.markdown("""
         }
     }
 </style>
+<script>
+    // Auto-collapse sidebar on mobile after navigation
+    const checkMobile = () => window.innerWidth <= 768;
+
+    if (checkMobile()) {
+        // Find sidebar collapse button and click it after navigation
+        const observer = new MutationObserver(() => {
+            const sidebar = document.querySelector('section[data-testid="stSidebar"]');
+            const collapseBtn = document.querySelector('[data-testid="stSidebarCollapseButton"]');
+            if (sidebar && collapseBtn && sidebar.getAttribute('aria-expanded') === 'true') {
+                // Small delay to allow navigation to complete
+                setTimeout(() => {
+                    if (checkMobile()) {
+                        collapseBtn.click();
+                    }
+                }, 100);
+            }
+        });
+
+        // Watch for page changes
+        const targetNode = document.body;
+        if (targetNode) {
+            observer.observe(targetNode, { childList: true, subtree: true });
+        }
+    }
+</script>
 """, unsafe_allow_html=True)
 
 
@@ -1110,20 +1166,21 @@ def page_mesecni_prikaz():
         current_idx = 0
         st.session_state['selected_month_key'] = period_keys[0]
 
-    # Navigation with prev/current/next cards
+    # Navigation with prev/current/next
+    current_period = year_periods[current_idx]
+    current_month = current_period['name'].split()[0]
+
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col1:
         if current_idx < len(year_periods) - 1:
             prev_period = year_periods[current_idx + 1]
             prev_month = prev_period['name'].split()[0]
-            if st.button(f"◀ {prev_month}", use_container_width=True):
+            if st.button(f"◀ {prev_month}", key="prev_month", use_container_width=True):
                 st.session_state['selected_month_key'] = prev_period['key']
                 st.rerun()
 
     with col2:
-        current_period = year_periods[current_idx]
-        current_month = current_period['name'].split()[0]
         st.markdown(f"""
         <div style="text-align: center; padding: 16px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; color: white;">
             <p style="margin: 0; font-size: 24px; font-weight: 700;">{current_month}</p>
@@ -1135,7 +1192,7 @@ def page_mesecni_prikaz():
         if current_idx > 0:
             next_period = year_periods[current_idx - 1]
             next_month = next_period['name'].split()[0]
-            if st.button(f"{next_month} ▶", use_container_width=True):
+            if st.button(f"{next_month} ▶", key="next_month", use_container_width=True):
                 st.session_state['selected_month_key'] = next_period['key']
                 st.rerun()
 

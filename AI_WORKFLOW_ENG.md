@@ -2,7 +2,7 @@
 
 This document describes a practical workflow for building applications using a combination of:
 - a human idea owner,
-- architectural validation,
+- architectural validation (ChatGPT),
 - and Claude Code (AI implementer).
 
 The goal is to:

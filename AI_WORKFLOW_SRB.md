@@ -2,7 +2,7 @@
 
 Ovaj dokument opisuje kako se koristi kombinacija:
 - čovek (vlasnik ideje),
-- arhitektonska validacija,
+- arhitektonska validacija (ChatGPT),
 - i Claude Code (AI implementer)
 
 za razvoj aplikacija na održiv i kontrolisan način.
